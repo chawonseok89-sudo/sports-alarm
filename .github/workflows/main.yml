@@ -2,20 +2,25 @@ name: Daily Sports Alarm
 
 on:
   schedule:
-    - cron: '0 13 * * *' # UTC 기준 13시는 한국 시간 밤 10시(22시)입니다.
-  workflow_dispatch: # 수동으로도 실행해볼 수 있게 하는 버튼입니다.
+    - cron: '0 13 * * *' # 한국 시간 밤 10시
+  workflow_dispatch: # 수동 실행 버튼
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          
       - name: Install dependencies
-        run: pip install python-telegram-bot
+        run: |
+          python -m pip install --upgrade pip
+          pip install python-telegram-bot requests beautifulsoup4
+          
       - name: Run script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
