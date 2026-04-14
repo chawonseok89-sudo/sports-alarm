@@ -2,18 +2,17 @@ import os
 import asyncio
 import telegram
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime
 
-# 1. 경기 정보 추출 (진행중/종료/예정 표시)
+# 1. 경기 정보 추출 (네이버 검색 활용)
 def get_match_info(team_name):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        search_url = f"https://search.naver.com/search.naver?query={team_name}+경기결과"
-        res = requests.get(search_url, headers=headers)
+        url = f"https://search.naver.com/search.naver?query={team_name}+경기결과"
+        res = requests.get(url, headers=headers)
+        from bs4 import BeautifulSoup
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 경기 상태 및 스코어
         status_area = soup.select_one(".status_area")
         score_area = soup.select_one(".score_area")
         
@@ -23,47 +22,46 @@ def get_match_info(team_name):
             return f"[{status}] {score}"
         return "오늘 예정된 경기가 없습니다."
     except:
-        return "경기 정보를 불러오는 중입니다."
+        return "경기 정보 업데이트 중"
 
-# 2. 리그 순위 추출 (경기 유무와 상관없이 작동)
-def get_league_ranking(category, team_name):
+# 2. 리그 순위 추출 (네이버 내부 데이터 주소 직접 접근)
+def get_rank(category):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        # 네이버 스포츠 순위 페이지 (직접 접근)
-        url = f"https://sports.news.naver.com/{category}/record/index"
-        res = requests.get(url, headers=headers)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        # 야구와 축구의 순위 데이터 서버 주소 (API)
+        if category == "kbaseball":
+            url = "https://sports-api.naver.com/kbaseball/record/team?year=2026"
+            target_team = "KIA"
+        else:
+            url = "https://sports-api.naver.com/kfootball/record/team?year=2026&leagueId=K1"
+            target_team = "전북"
+
+        data = requests.get(url, headers=headers).json()
         
-        rows = soup.select("table tbody tr")
-        for row in rows:
-            # 팀 이름이 포함된 행 찾기 (예: KIA, 전북)
-            if team_name in row.text:
-                rank = row.select_one("th").text.strip() # 순위
-                tds = row.select("td")
-                
-                if category == "kbaseball": # 야구: 경기수, 승, 패, 무, 승률, 게임차
-                    win_draw_loss = f"{tds[1].text}승 {tds[3].text}무 {正式_loss := tds[2].text}패"
-                    gap = f" / 게임차: {tds[5].text}"
-                    return f"{rank}위 ({win_draw_loss}){gap}"
-                else: # 축구: 경기수, 승점, 승, 무, 패, 득점, 실점
-                    points = f"{tds[0].text}점"
-                    wdl = f"{tds[1].text}승 {tds[2].text}무 {tds[3].text}패"
-                    return f"{rank}위 (승점 {points} / {wdl})"
-        return "순위 데이터를 찾을 수 없습니다."
-    except:
-        return "순위 정보를 불러오는 중 오류가 발생했습니다."
+        # 데이터 리스트에서 우리 팀 찾기
+        for item in data.get('regularTeamRecordList', data.get('teamRecordList', [])):
+            team_name = item.get('teamName', item.get('name', ''))
+            if target_team in team_name:
+                rank = item['rank']
+                if category == "kbaseball":
+                    return f"{rank}위 ({item['won']}승 {item['drawn']}무 {item['lost']}패 / 게임차: {item['gameDiff']})"
+                else:
+                    return f"{rank}위 (승점 {item['point']}점 / {item['won']}승 {item['drawn']}무 {item['lost']}패)"
+        return "순위 정보 검색 실패"
+    except Exception as e:
+        return f"순위 로딩 실패"
 
 async def send_sports_report():
     token = os.environ['TELEGRAM_TOKEN']
     chat_id = os.environ['CHAT_ID']
     bot = telegram.Bot(token=token)
 
-    # 데이터 수집 (경기 정보와 순위 정보를 독립적으로 가져옴)
+    # 데이터 수집
     kia_match = get_match_info("기아타이거즈")
-    kia_rank = get_league_ranking("kbaseball", "KIA")
+    kia_rank = get_rank("kbaseball")
     
     jb_match = get_match_info("전북현대")
-    jb_rank = get_league_ranking("kfootball", "전북")
+    jb_rank = get_rank("kfootball")
     
     today_str = datetime.now().strftime('%m%d')
     kia_yt = f"https://www.youtube.com/results?search_query=기아타이거즈+하이라이트+{today_str}"
@@ -79,7 +77,7 @@ async def send_sports_report():
         f"🏆 현재순위: {jb_rank}\n"
         f"📊 경기결과: {jb_match}\n"
         f"📺 영상: {jb_yt}\n\n"
-        f"내일도 승리하길 응원합니다! 🙌"
+        f"오늘도 수고하셨습니다! 내일도 응원해요! 😊"
     )
 
     await bot.send_message(chat_id=chat_id, text=message)
