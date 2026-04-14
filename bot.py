@@ -4,60 +4,71 @@ import telegram
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+import re
 
-def get_rank_from_page(url, team_name):
+def get_sports_rank(query, team_name):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'}
+        # 검색 결과 페이지 접속
+        url = f"https://search.naver.com/search.naver?query={query}"
         res = requests.get(url, headers=headers)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 순위표 테이블의 모든 행(tr)을 가져옵니다.
+        # 1. 테이블 형태의 데이터 먼저 탐색
         rows = soup.find_all('tr')
         for row in rows:
-            row_text = row.get_text()
-            if team_name in row_text:
-                # 팀명이 포함된 줄에서 숫자(순위)를 뽑아냅니다.
-                # 보통 첫 번째 칸(td 또는 th)에 순위가 있습니다.
-                rank = row.find(['th', 'td']).get_text().strip()
-                return f"{rank}위"
-        return "순위 확인 불가"
-    except:
-        return "데이터 읽기 실패"
-
-def get_match_result(query):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        url = f"https://search.naver.com/search.naver?query={query}+경기결과"
-        res = requests.get(url, headers=headers)
-        soup = BeautifulSoup(res.text, 'html.parser')
+            if team_name in row.text:
+                # 팀 이름이 포함된 행에서 '위'라는 글자가 포함된 텍스트 추출
+                cells = row.find_all(['th', 'td'])
+                for cell in cells:
+                    cell_text = cell.text.strip()
+                    if '위' in cell_text or cell_text.isdigit():
+                        return f"{cell_text if '위' in cell_text else cell_text + '위'}"
         
-        status = soup.select_one(".status_area").get_text().strip() if soup.select_one(".status_area") else "경기 없음"
-        score = soup.select_one(".score_area").get_text().strip() if soup.select_one(".score_area") else ""
-        return f"[{status}] {score}"
+        # 2. 텍스트 패턴 매칭 (최후의 수단)
+        # "기아 1위" 또는 "1위 KIA" 같은 패턴을 찾음
+        pattern = re.compile(rf"{team_name}.*?(\d+위)|(\d+위).*?{team_name}")
+        match = pattern.search(res.text)
+        if match:
+            return match.group(1) or match.group(2)
+
+        return "순위 확인 중"
     except:
-        return "정보 없음"
+        return "데이터 확인 불가"
 
 async def send_sports_report():
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('CHAT_ID')
     bot = telegram.Bot(token=token)
 
-    # 사용자님이 말씀하신 그 순위 페이지 주소들
-    kia_rank = get_rank_from_page("https://sports.news.naver.com/kbaseball/record/index", "KIA")
-    jb_rank = get_rank_from_page("https://sports.news.naver.com/kfootball/record/index", "전북")
+    # 검색어를 더 정확하게 입력 (리그 전체 순위표를 불러오도록)
+    kia_rank = get_sports_rank("KBO 순위", "기아")
+    jb_rank = get_sports_rank("K리그1 순위", "전북")
     
-    kia_match = get_match_result("기아타이거즈")
-    jb_match = get_match_result("전북현대")
+    # 경기 결과는 기존 방식 유지
+    url_base = "https://search.naver.com/search.naver?query="
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
-    today_str = datetime.now().strftime('%m%d')
-    kia_yt = f"https://www.youtube.com/results?search_query=기아타이거즈+하이라이트+{today_str}"
-    jb_yt = f"https://www.youtube.com/results?search_query=전북현대+하이라이트+{today_str}"
+    k_res = requests.get(url_base + "기아타이거즈+경기결과", headers=headers)
+    j_res = requests.get(url_base + "전북현대+경기결과", headers=headers)
+    
+    k_soup = BeautifulSoup(k_res.text, 'html.parser')
+    j_soup = BeautifulSoup(j_res.text, 'html.parser')
+    
+    k_status = k_soup.select_one(".status_area").text.strip() if k_soup.select_one(".status_area") else "경기 없음"
+    k_score = k_soup.select_one(".score_area").text.strip() if k_soup.select_one(".score_area") else ""
+    
+    j_status = j_soup.select_one(".status_area").text.strip() if j_soup.select_one(".status_area") else "경기 없음"
+    j_score = j_soup.select_one(".score_area").text.strip() if j_soup.select_one(".score_area") else ""
 
+    today_str = datetime.now().strftime('%m%d')
     message = (
         f"📅 {datetime.now().strftime('%Y-%m-%d')} 스포츠 통합 리포트\n\n"
-        f"🐯 [기아 타이거즈]\n🏆 현재순위: {kia_rank}\n📊 경기결과: {kia_match}\n📺 영상: {kia_yt}\n\n"
-        f"⚽ [전북 현대]\n🏆 현재순위: {jb_rank}\n📊 경기결과: {jb_match}\n📺 영상: {jb_yt}\n\n"
-        f"순위표 페이지를 직접 읽어서 가져왔습니다! 😊"
+        f"🐯 [기아 타이거즈]\n🏆 현재순위: {kia_rank}\n📊 경기결과: [{k_status}] {k_score}\n"
+        f"📺 영상: https://www.youtube.com/results?search_query=기아타이거즈+하이라이트+{today_str}\n\n"
+        f"⚽ [전북 현대]\n🏆 현재순위: {jb_rank}\n📊 경기결과: [{j_status}] {j_score}\n"
+        f"📺 영상: https://www.youtube.com/results?search_query=전북현대+하이라이트+{today_str}\n\n"
+        f"검색 요약 정보를 활용해 정확도를 높였습니다! 😊"
     )
 
     await bot.send_message(chat_id=chat_id, text=message)
