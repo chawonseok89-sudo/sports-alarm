@@ -2,63 +2,52 @@ import os
 import asyncio
 import telegram
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 
-def get_kbo_rank():
+def get_rank_from_page(url, team_name):
     try:
-        # KBO 팀순위 페이지의 원본 데이터 주소
-        url = "https://sports-api.naver.com/kbaseball/record/team?year=2026"
-        res = requests.get(url).json()
-        for team in res['teamRecordList']:
-            if "KIA" in team['name']:
-                return f"{team['rank']}위 ({team['won']}승 {team['drawn']}무 {team['lost']}패 / 게임차: {team['gameDiff']})"
-        return "순위 정보 없음"
-    except:
-        return "데이터 수집 중"
-
-def get_kleague_rank():
-    try:
-        # K리그1 팀순위 페이지의 원본 데이터 주소
-        url = "https://sports-api.naver.com/kfootball/record/team?year=2026&leagueId=K1"
-        res = requests.get(url).json()
-        for team in res['teamRecordList']:
-            if "전북" in team['name']:
-                return f"{team['rank']}위 (승점 {team['point']}점 / {team['won']}승 {team['drawn']}무 {team['lost']}패)"
-        return "순위 정보 없음"
-    except:
-        return "데이터 수집 중"
-
-def get_match_status(team_name, category):
-    try:
-        today = datetime.now().strftime('%Y%m%d')
-        # 야구/축구 일정 데이터 주소
-        url = f"https://sports-api.naver.com/{category}/schedule?date={today}"
-        res = requests.get(url).json()
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 오늘 경기 목록에서 우리 팀 찾기
-        for game in res.get('todayScheduleList', []):
-            if team_name in [game['homeTeamName'], game['awayTeamName']]:
-                state = game['state'] # 종료, 진행중, 예정 등
-                h_team = game['homeTeamName']
-                a_team = game['awayTeamName']
-                h_score = game['homeTeamScore']
-                a_score = game['awayTeamScore']
-                return f"[{state}] {h_team} {h_score} : {a_score} {a_team}"
-        return "오늘 예정된 경기 없음"
+        # 순위표 테이블의 모든 행(tr)을 가져옵니다.
+        rows = soup.find_all('tr')
+        for row in rows:
+            row_text = row.get_text()
+            if team_name in row_text:
+                # 팀명이 포함된 줄에서 숫자(순위)를 뽑아냅니다.
+                # 보통 첫 번째 칸(td 또는 th)에 순위가 있습니다.
+                rank = row.find(['th', 'td']).get_text().strip()
+                return f"{rank}위"
+        return "순위 확인 불가"
     except:
-        return "경기 정보 업데이트 중"
+        return "데이터 읽기 실패"
+
+def get_match_result(query):
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        url = f"https://search.naver.com/search.naver?query={query}+경기결과"
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        status = soup.select_one(".status_area").get_text().strip() if soup.select_one(".status_area") else "경기 없음"
+        score = soup.select_one(".score_area").get_text().strip() if soup.select_one(".score_area") else ""
+        return f"[{status}] {score}"
+    except:
+        return "정보 없음"
 
 async def send_sports_report():
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('CHAT_ID')
     bot = telegram.Bot(token=token)
 
-    # 각각의 순위와 경기 정보를 가져옴
-    kia_rank = get_kbo_rank()
-    kia_match = get_match_status("KIA", "kbaseball")
+    # 사용자님이 말씀하신 그 순위 페이지 주소들
+    kia_rank = get_rank_from_page("https://sports.news.naver.com/kbaseball/record/index", "KIA")
+    jb_rank = get_rank_from_page("https://sports.news.naver.com/kfootball/record/index", "전북")
     
-    jb_rank = get_kleague_rank()
-    jb_match = get_match_status("전북", "kfootball")
+    kia_match = get_match_result("기아타이거즈")
+    jb_match = get_match_result("전북현대")
     
     today_str = datetime.now().strftime('%m%d')
     kia_yt = f"https://www.youtube.com/results?search_query=기아타이거즈+하이라이트+{today_str}"
@@ -68,7 +57,7 @@ async def send_sports_report():
         f"📅 {datetime.now().strftime('%Y-%m-%d')} 스포츠 통합 리포트\n\n"
         f"🐯 [기아 타이거즈]\n🏆 현재순위: {kia_rank}\n📊 경기결과: {kia_match}\n📺 영상: {kia_yt}\n\n"
         f"⚽ [전북 현대]\n🏆 현재순위: {jb_rank}\n📊 경기결과: {jb_match}\n📺 영상: {jb_yt}\n\n"
-        f"말씀하신 순위표 데이터를 직접 가져왔습니다! 😊"
+        f"순위표 페이지를 직접 읽어서 가져왔습니다! 😊"
     )
 
     await bot.send_message(chat_id=chat_id, text=message)
