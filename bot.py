@@ -5,46 +5,55 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-# 1. 경기 정보 및 순위 통합 추출 (네이버 검색 활용)
-def get_sports_data(team_query, team_name):
+def get_sports_data(query, team_name):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        # 네이버에 '팀명 순위'로 검색
-        url = f"https://search.naver.com/search.naver?query={team_query}+순위"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        url = f"https://search.naver.com/search.naver?query={query}+순위"
         res = requests.get(url, headers=headers)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 순위 정보 찾기 (검색 결과 상단 스코어보드/순위표 타겟)
-        rank_area = soup.select_one(".rank_num, .num, .item_rank")
-        if not rank_area: # 대체 경로
-            rank_area = soup.select_one(".table_group.type_rank")
-            
-        # 경기 정보 찾기
-        status_area = soup.select_one(".status_area")
-        score_area = soup.select_one(".score_area")
+        # 1. 순위 정보 추출 (여러 패턴 시도)
+        rank = "순위 확인 불가"
+        # 패턴 A: 검색 결과 상단 큰 글씨
+        rank_tag = soup.select_one(".rank_num, .num, .item_rank, ._total_rank")
+        if rank_tag:
+            rank = rank_tag.text.strip()
+        # 패턴 B: 테이블 내 텍스트 검색
+        elif team_name in res.text:
+            rank_idx = res.text.find(team_name)
+            # 팀명 주변에서 '위'라는 글자 찾기
+            snippet = res.text[max(0, rank_idx-20):rank_idx+20]
+            if "위" in snippet:
+                rank = snippet.split("위")[0].split()[-1] + "위"
 
-        # 데이터 정리
-        status = status_area.text.strip() if status_area else "경기 없음"
-        score = score_area.text.strip() if score_area else ""
+        # 2. 경기 정보 추출
+        status = "경기 없음"
+        score = ""
+        status_tag = soup.select_one(".status_area, .state")
+        score_tag = soup.select_one(".score_area, .score")
         
-        # 순위 텍스트 정리 (예: 1위)
-        rank = "순위 정보 확인 중"
-        if rank_area:
-            rank_text = rank_area.text.strip().split('\n')[0]
-            rank = f"{rank_text}"
-        
-        return f"{rank}", f"[{status}] {score}"
+        if status_tag:
+            status = status_tag.text.strip()
+        if score_tag:
+            score = score_tag.text.strip()
+            
+        return rank, f"[{status}] {score}"
     except:
-        return "순위 확인 중", "정보 업데이트 중"
+        return "데이터 오류", "업데이트 중"
 
 async def send_sports_report():
-    token = os.environ['TELEGRAM_TOKEN']
-    chat_id = os.environ['CHAT_ID']
+    # GitHub Secrets 설정 확인
+    token = os.environ.get('TELEGRAM_TOKEN')
+    chat_id = os.environ.get('CHAT_ID')
+    if not token or not chat_id:
+        print("설정 오류: TOKEN이나 CHAT_ID를 확인하세요.")
+        return
+
     bot = telegram.Bot(token=token)
 
-    # 데이터 수집
-    kia_rank, kia_match = get_sports_data("기아타이거즈", "KIA")
-    jb_rank, jb_match = get_sports_data("전북현대", "전북")
+    # 데이터 수집 (쿼리를 더 명확하게 수정)
+    kia_rank, kia_match = get_sports_data("2026 KBO 순위", "KIA")
+    jb_rank, jb_match = get_sports_data("2026 K리그 순위", "전북")
     
     today_str = datetime.now().strftime('%m%d')
     kia_yt = f"https://www.youtube.com/results?search_query=기아타이거즈+하이라이트+{today_str}"
@@ -60,7 +69,7 @@ async def send_sports_report():
         f"🏆 현재순위: {jb_rank}\n"
         f"📊 경기결과: {jb_match}\n"
         f"📺 영상: {jb_yt}\n\n"
-        f"밤 10시 알림 설정 완료! 오늘도 고생하셨습니다. 😊"
+        f"오늘도 고생하셨습니다! 밤 10시에 만나요. 😊"
     )
 
     await bot.send_message(chat_id=chat_id, text=message)
