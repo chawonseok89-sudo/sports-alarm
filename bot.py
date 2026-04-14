@@ -1,9 +1,29 @@
-0자 이내에서 '숫자+위' 패턴 찾기
-            match = re.search(rf"{team_name[:2]}.*?(\d+)위", res.text)
-            if match: rank = match.group(1) + "위"
+import os
+import asyncio
+import telegram
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
 
-        # 2. 결과 및 일정 추출 (박스 형태 데이터 공략)
-        # 종료된 경기와 예정된 경기를 텍스트로 구분
+def get_sports_info(team_name):
+    headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'}
+    rank, last, next_m = "데이터 확인 중", "최신 기록 없음", "다음 일정 없음"
+    
+    try:
+        url = f"https://m.search.naver.com/search.naver?query={team_name}+순위+경기일정"
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 순위 추출
+        rank_tag = soup.select_one(".rank_num, .num, .item_rank, ._total_rank")
+        if rank_tag:
+            rank = rank_tag.get_text().strip() + "위"
+        else:
+            import re
+            match = re.search(r'(\d+)위', res.text)
+            if match: rank = match.group(0)
+
+        # 결과 및 일정 추출
         items = soup.select(".item_list li, .schedule_item, .inner")
         past_list = []
         future_list = []
@@ -28,7 +48,6 @@ async def send_sports_report():
     chat_id = os.environ.get('CHAT_ID')
     bot = telegram.Bot(token=token)
 
-    # 기아와 전북 데이터 수집
     k_rank, k_last, k_next = get_sports_info("기아타이거즈")
     j_rank, j_last, j_next = get_sports_info("전북현대")
     
@@ -44,7 +63,7 @@ async def send_sports_report():
         f"✅ 결과: {j_last}\n"
         f"📅 일정: {j_next}\n"
         f"🎬 영상: https://www.youtube.com/results?search_query=전북현대+하이라이트\n\n"
-        f"끊김 없이 배달될 수 있도록 보완했습니다! 😊"
+        f"모든 오류를 수정했습니다! 이제 정상적으로 배달될 거예요. 😊"
     )
 
     await bot.send_message(chat_id=chat_id, text=message)
