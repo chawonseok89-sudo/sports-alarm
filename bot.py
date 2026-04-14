@@ -5,39 +5,45 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-def get_sports_data(team_name, category_id):
+def get_sports_details(team_name, category_path):
+    # 아이폰 모바일 브라우저인 척 하여 접근성을 높입니다.
     headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'}
     
     rank, last_game, next_game = "확인 불가", "기록 없음", "일정 없음"
     
     try:
-        # 네이버 모바일 검색 활용 (데이터가 더 깔끔함)
-        url = f"https://m.search.naver.com/search.naver?query={team_name}+순위+일정"
-        res = requests.get(url, headers=headers)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        # 1. 순위 가져오기 (통합 검색)
+        rank_url = f"https://m.search.naver.com/search.naver?query={team_name}+순위"
+        r_res = requests.get(rank_url, headers=headers)
+        r_soup = BeautifulSoup(r_res.text, 'html.parser')
+        rank_tag = r_soup.select_one(".rank_num, .num, .item_rank")
+        if rank_tag: rank = rank_tag.text.strip() + "위"
 
-        # 1. 순위 추출
-        rank_tag = soup.select_one(".rank_num, .num, .item_rank")
-        if rank_tag:
-            rank = rank_tag.text.strip() + "위"
-        elif team_name in res.text:
-            # 텍스트에서 강제로 순위 찾기
-            import re
-            match = re.search(r'(\d+)위', res.text)
-            if match: rank = match.group(0)
-
-        # 2. 최근 경기 및 다음 일정 추출
-        matches = soup.select(".item_list li, .schedule_item")
-        for m in matches:
+        # 2. 최근 결과 및 다음 일정 (네이버 스포츠 팀별 일정 페이지)
+        # category_path 예: kbaseball, kfootball
+        schedule_url = f"https://m.sports.naver.com/{category_path}/schedule/index"
+        s_res = requests.get(schedule_url, headers=headers)
+        s_soup = BeautifulSoup(s_res.text, 'html.parser')
+        
+        # 경기 목록(리스트)을 다 긁어옵니다.
+        matches = s_soup.select(".ScheduleAllType_match_list_group__3Tafm, .MatchBox_match_item__2Wp9o")
+        
+        past = []
+        future = []
+        
+        for m in s_soup.select(".ScheduleAllType_match_list_item__3n08h, .match_item"):
             m_text = m.get_text(separator=" ").strip()
-            if "종료" in m_text:
-                last_game = m_text.split("종료")[0].strip()
-            elif "전" in m_text or ":" in m_text or "vs" in m_text:
-                if next_game == "일정 없음":
-                    next_game = m_text.strip()
-                    
-    except Exception as e:
-        print(f"Error: {e}")
+            if team_name[:2] in m_text: # 팀명이 포함된 경기만
+                if "종료" in m_text or "취소" in m_text:
+                    past.append(m_text)
+                else:
+                    future.append(m_text)
+        
+        if past: last_game = past[-1].replace("종료", "[종료]").strip()
+        if future: next_game = future[0].strip()
+
+    except:
+        pass
         
     return rank, last_game, next_game
 
@@ -46,13 +52,16 @@ async def send_sports_report():
     chat_id = os.environ.get('CHAT_ID')
     bot = telegram.Bot(token=token)
 
-    # 기아와 전북 데이터 가져오기
-    k_rank, k_last, k_next = get_sports_data("기아타이거즈", "kbaseball")
-    j_rank, j_last, j_next = get_sports_data("전북현대", "kfootball")
+    # 데이터 수집 (기아는 kbaseball, 전북은 kfootball)
+    k_rank, k_last, k_next = get_sports_details("기아타이거즈", "kbaseball")
+    j_rank, j_last, j_next = get_sports_details("전북현대", "kfootball")
     
-    # 하이라이트 링크는 최근 경기가 있으면 해당 팀들로, 없으면 기본 팀명으로 생성
-    k_vid = f"https://www.youtube.com/results?search_query={k_last.replace(' ', '+') if '기록 없음' not in k_last else '기아타이거즈'}+하이라이트"
-    j_vid = f"https://www.youtube.com/results?search_query={j_last.replace(' ', '+') if '기록 없음' not in j_last else '전북현대'}+하이라이트"
+    # 하이라이트 링크 (최근 경기 팀들 이름으로 검색)
+    k_vid_query = k_last.replace("[종료]", "").strip() if "기록" not in k_last else "기아타이거즈"
+    j_vid_query = j_last.replace("[종료]", "").strip() if "기록" not in j_last else "전북현대"
+    
+    k_vid = f"https://www.youtube.com/results?search_query={k_vid_query.replace(' ', '+')}+하이라이트"
+    j_vid = f"https://www.youtube.com/results?search_query={j_vid_query.replace(' ', '+')}+하이라이트"
     
     message = (
         f"📅 {datetime.now().strftime('%Y-%m-%d')} 스포츠 통합 리포트\n\n"
@@ -66,7 +75,7 @@ async def send_sports_report():
         f"✅ 최근결과: {j_last}\n"
         f"📅 다음일정: {j_next}\n"
         f"🎬 하이라이트: {j_vid}\n\n"
-        f"밤 10시 정각에 자동으로 배달됩니다! 😊"
+        f"오늘 밤 10시에 자동으로 배달됩니다! 😊"
     )
 
     await bot.send_message(chat_id=chat_id, text=message)
